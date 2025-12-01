@@ -1,15 +1,10 @@
-/**
- * Based on post in http://stackoverflow.com/questions/5694933/find-an-external-sd-card-location
- * author: http://stackoverflow.com/users/565319/richard
- */
 package nostalgia.framework.utils;
 
+import android.content.Context;
+import android.os.Build;
 import android.os.Environment;
 
-import java.io.BufferedReader;
 import java.io.File;
-import java.io.FileNotFoundException;
-import java.io.FileReader;
 import java.io.IOException;
 import java.util.HashSet;
 import java.util.Scanner;
@@ -45,89 +40,72 @@ public class SDCardUtil {
     /**
      * @return A map of all storage locations available
      */
-    public static HashSet<File> getAllStorageLocations() {
-        HashSet<String> sdcards = new HashSet<>(3);
-        sdcards.add("/mnt/sdcard");
+    public static HashSet<File> getAllStorageLocations(Context context) {
+        HashSet<File> storageRoots = new HashSet<>();
+
+        // 1. Primary External Storage (Internal Memory)
+        File primaryStorage = Environment.getExternalStorageDirectory();
+        if (primaryStorage != null && primaryStorage.exists()) {
+            storageRoots.add(primaryStorage);
+        }
+
+        // 2. Secondary Storages via API (SD Cards, USB drives)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT && context != null) {
+            File[] externalDirs = context.getExternalFilesDirs(null);
+            if (externalDirs != null) {
+                for (File file : externalDirs) {
+                    if (file != null) {
+                        String path = file.getAbsolutePath();
+                        // path is usually /storage/XXXX-XXXX/Android/data/package/files
+                        // We want the root: /storage/XXXX-XXXX
+                        int index = path.indexOf("/Android");
+                        if (index != -1) {
+                            String rootPath = path.substring(0, index);
+                            storageRoots.add(new File(rootPath));
+                        } else {
+                            // Fallback if structure is different
+                            storageRoots.add(file);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Fallback: Scan /proc/mounts for other mount points
+        // Useful for some older devices or custom ROMs, but filtered to avoid system paths
         try {
             File mountFile = new File("/proc/mounts");
             if (mountFile.exists()) {
                 Scanner scanner = new Scanner(mountFile);
                 while (scanner.hasNext()) {
                     String line = scanner.nextLine();
-                    String lineLower = line.toLowerCase(); // neukladat lower
-                    // primo do
-                    // line, protoze
-                    // zbytek line je
-                    // case sensitive
-                    if (lineLower.contains("vfat") || lineLower.contains("exfat") ||
-                            lineLower.contains("fuse") || lineLower.contains("sdcardfs")) {
-                        String[] lineElements = line.split(" ");
-                        String path = lineElements[1];
-                        sdcards.add(path);
-                    }
-                }
-            }
-        } catch (Exception e) {
-            NLog.e(TAG, "", e);
-        }
-        getSDcardsPath(sdcards);
-        HashSet<File> result = new HashSet<>(sdcards.size());
-        for (String mount : sdcards) {
-            File root = new File(mount);
-            if (root.exists() && root.isDirectory() && root.canRead()) {
-                result.add(root);
-            }
-        }
-        return result;
-    }
-
-    /**
-     * Copy from
-     * http://www.javacodegeeks.com/2012/10/android-finding-sd-card-path.html
-     *
-     * @return
-     */
-    private static void getSDcardsPath(HashSet<String> set) {
-        File file = new File("/system/etc/vold.fstab");
-        FileReader fr = null;
-        BufferedReader br = null;
-        try {
-            fr = new FileReader(file);
-        } catch (FileNotFoundException e) {
-            e.printStackTrace();
-        }
-        try {
-            if (fr != null) {
-                String defaultExternalStorage =
-                        Environment.getExternalStorageDirectory().getAbsolutePath();
-                br = new BufferedReader(fr);
-                String s = br.readLine();
-                while (s != null) {
-                    if (s.startsWith("dev_mount")) {
-                        String[] tokens = s.split("\\s");
-                        String path = tokens[2]; // mount_point
-                        if (!defaultExternalStorage.equals(path)) {
-                            set.add(path);
-                            break;
+                    // Basic heuristic to find storage mounts
+                    if (line.contains("/mnt") || line.contains("/storage") || line.contains("/sdcard")) {
+                        String[] lineElements = line.split("\\s+");
+                        if (lineElements.length >= 2) {
+                            String mountPoint = lineElements[1];
+                            // Exclude common system/virtual paths
+                            if (!mountPoint.equals(Environment.getExternalStorageDirectory().getAbsolutePath())
+                                    && !mountPoint.startsWith("/data")
+                                    && !mountPoint.startsWith("/system")
+                                    && !mountPoint.startsWith("/proc")
+                                    && !mountPoint.startsWith("/sys")
+                                    && !mountPoint.startsWith("/dev")
+                                    && !mountPoint.contains("asec")
+                                    && !mountPoint.contains("obb")
+                                    && (line.contains("vfat") || line.contains("exfat") || line.contains("ntfs") || line.contains("fuse") || line.contains("sdcardfs"))) {
+                                storageRoots.add(new File(mountPoint));
+                            }
                         }
                     }
-                    s = br.readLine();
                 }
+                scanner.close();
             }
-        } catch (IOException e) {
-            e.printStackTrace();
-        } finally {
-            try {
-                if (fr != null) {
-                    fr.close();
-                }
-                if (br != null) {
-                    br.close();
-                }
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
+        } catch (Exception e) {
+            NLog.e(TAG, "Error parsing /proc/mounts", e);
         }
+
+        return storageRoots;
     }
 
     /**
