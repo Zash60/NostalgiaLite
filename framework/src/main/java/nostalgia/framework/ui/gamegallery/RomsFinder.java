@@ -215,7 +215,8 @@ public class RomsFinder extends Thread {
         HashSet<File> roots = new HashSet<>();
 
         if (selectedFolder == null) {
-            roots = SDCardUtil.getAllStorageLocations();
+            // FIXED: Pass activity context to utilize new discovery logic
+            roots = SDCardUtil.getAllStorageLocations(activity);
         } else {
             roots.add(selectedFolder);
         }
@@ -370,4 +371,4 @@ public class RomsFinder extends Thread {
         }
     }
 
-}
+            }
